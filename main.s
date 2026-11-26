@@ -57,6 +57,7 @@ cur_tick:       .skip 4
 
 _start:
     bl      read_all_input
+    bl      parse_input
 
     mov     x0, #0
     mov     x8, #SYS_EXIT
@@ -97,4 +98,164 @@ read_all_input:
     strb    wzr, [x19, x20]             // null-terminate buffer
     ldp     x19, x20, [sp, #16]
     ldp     x29, x30, [sp], #32
+    ret
+
+// -----------------------------------------------------------------------------
+// skip_spaces: Advances x19 past ' ' characters.
+// -----------------------------------------------------------------------------
+skip_spaces:
+1:
+    ldrb    w0, [x19]
+    cmp     w0, #' '
+    b.ne    2f
+    add     x19, x19, #1
+    b       1b
+2:
+    ret
+
+// -----------------------------------------------------------------------------
+// parse_uint: Parses non-negative decimal integer at x19 into w0, advancing x19.
+// -----------------------------------------------------------------------------
+parse_uint:
+    mov     w0, #0
+    mov     w2, #10
+1:
+    ldrb    w1, [x19]
+    sub     w3, w1, #'0'
+    cmp     w3, #9
+    b.hi    2f
+    mul     w0, w0, w2
+    add     w0, w0, w3
+    add     x19, x19, #1
+    b       1b
+2:
+    ret
+
+// -----------------------------------------------------------------------------
+// parse_input: Parses the 3 station rules and 1..10 order specifications.
+// -----------------------------------------------------------------------------
+parse_input:
+    stp     x29, x30, [sp, #-48]!
+    mov     x29, sp
+    stp     x19, x20, [sp, #16]
+    stp     x21, x22, [sp, #32]
+
+    adrp    x19, in_buf
+    add     x19, x19, :lo12:in_buf
+
+    adrp    x20, stations
+    add     x20, x20, :lo12:stations
+    mov     w21, #0                     // station index s = 0..2
+    mov     w22, #-1
+
+parse_rules_loop:
+    cmp     w21, #3
+    b.ge    parse_orders_init
+
+    bl      skip_spaces
+    ldrb    w0, [x19]
+
+    cmp     w0, #'F'
+    b.eq    rule_is_first
+    cmp     w0, #'Q'
+    b.eq    rule_is_quick
+
+    // Must be TURNS-q
+    mov     w1, #RULE_TURNS
+    str     w1, [x20, #0]
+    add     x19, x19, #6                // skip "TURNS-"
+    ldrb    w2, [x19]
+    sub     w2, w2, #'0'
+    str     w2, [x20, #4]               // q
+    b       advance_past_rule
+
+rule_is_first:
+    mov     w1, #RULE_FIRST
+    str     w1, [x20, #0]
+    str     wzr, [x20, #4]
+    b       advance_past_rule
+
+rule_is_quick:
+    mov     w1, #RULE_QUICK
+    str     w1, [x20, #0]
+    str     wzr, [x20, #4]
+
+advance_past_rule:
+    str     w22, [x20, #8]              // active_order = -1
+    str     wzr, [x20, #12]             // turn_used = 0
+    str     w22, [x20, #16]             // pending_requeue = -1
+    str     wzr, [x20, #20]             // q_len = 0
+
+1:
+    ldrb    w0, [x19]
+    cmp     w0, #' '
+    b.eq    2f
+    cmp     w0, #'\n'
+    b.eq    2f
+    cmp     w0, #'\r'
+    b.eq    2f
+    cbz     w0, 2f
+    add     x19, x19, #1
+    b       1b
+2:
+    add     x20, x20, #STATION_SIZE
+    add     w21, w21, #1
+    b       parse_rules_loop
+
+parse_orders_init:
+    adrp    x20, orders
+    add     x20, x20, :lo12:orders
+    mov     w21, #0                     // order count
+    mov     w22, #-1
+
+parse_orders_loop:
+    bl      skip_spaces
+    ldrb    w0, [x19]
+    cmp     w0, #'\n'
+    b.eq    parse_done
+    cmp     w0, #'\r'
+    b.eq    parse_done
+    cbz     w0, parse_done
+
+    // Order ID and initial flags
+    strb    w0, [x20, #0]               // id
+    strb    wzr, [x20, #1]              // in_station = 0
+    strb    wzr, [x20, #2]              // pending_enter = 0
+    add     x19, x19, #2                // skip ID and '-'
+
+    // arrival
+    bl      parse_uint
+    str     w0, [x20, #4]
+    add     x19, x19, #1                // skip '-'
+
+    // prep
+    bl      parse_uint
+    str     w0, [x20, #8]
+    add     x19, x19, #1                // skip '-'
+
+    // cook
+    bl      parse_uint
+    str     w0, [x20, #12]
+    add     x19, x19, #1                // skip '-'
+
+    // plate
+    bl      parse_uint
+    str     w0, [x20, #16]
+
+    str     w22, [x20, #20]             // cur_station = -1
+    str     wzr, [x20, #24]             // entry_time = 0
+    str     wzr, [x20, #28]             // serve_time = 0
+
+    add     x20, x20, #ORDER_SIZE
+    add     w21, w21, #1
+    b       parse_orders_loop
+
+parse_done:
+    adrp    x0, num_orders
+    add     x0, x0, :lo12:num_orders
+    str     w21, [x0]
+
+    ldp     x21, x22, [sp, #32]
+    ldp     x19, x20, [sp, #16]
+    ldp     x29, x30, [sp], #48
     ret
